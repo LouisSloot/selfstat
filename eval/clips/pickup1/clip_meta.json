@@ -1,0 +1,6 @@
+{
+  "source": "data_dir/gameplay.webm",
+  "start": 39600,
+  "frames": 120,
+  "stride": 5
+}

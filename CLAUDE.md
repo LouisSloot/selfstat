@@ -91,7 +91,7 @@ The entry points reference files/dirs that are not in the repo. Before anything 
 
 ### Inferred dependencies
 
-No manifest exists; install these into the conda env as needed (names as imported): `ultralytics`, `torch`, `torchvision`, `scipy`, `opencv-python` (`cv2`), `numpy`, `tqdm`. Device selection prefers Apple **MPS**, then CUDA, then CPU — this is primarily a Mac dev environment.
+No manifest exists; install these into the conda env as needed (names as imported): `ultralytics`, `torch`, `torchvision`, `scipy`, `opencv-python` (`cv2`), `numpy`, `tqdm`, and `motmetrics` (for the `eval/` harness; needs the `np.asfarray` shim in `eval/metrics.py` under NumPy 2.x). Device selection prefers Apple **MPS**, then CUDA, then CPU — this is primarily a Mac dev environment.
 
 ## Architecture
 
@@ -121,6 +121,20 @@ The online per-frame tracker was removed in the offline pivot (`track_players.py
 1. **`label_players.py` (`supervised_label`, `label_seed_boxes`)** — a human-in-the-loop OpenCV GUI: scrub to a reference frame, click each detected person box, type a label. `label_seed_boxes` returns `(labels, seed_boxes_xyxy, ref_frame_idx)` and is what the `sam2` backbone uses to seed players. The most reusable asset.
 2. **`detect.py` (`YOLODetector`)** — thin Ultralytics YOLO wrapper (`detect_video` streams per-frame results; `detect_frame` returns one). Pairs with the labeling UI.
 3. **`utils.py`** — shared helpers (IoU, crop, center/wh, person-box filtering, video metadata, cosine sim, normalize) used by `label_players.py`.
+
+### Eval harness — `eval/` (tracking quality; "eval before tuning")
+
+Turns tracking quality into numbers (**IDF1 / MOTA / ID-switches** via `py-motmetrics`) and compares the two backbones on hand-labeled short clips. Modules: `mot_io.py` (tracks.json → MOTChallenge txt), `metrics.py` (motmetrics scoring + comparison table), `label_gt.py` (OpenCV GT labeler — YOLO-proposed boxes + IoU carry-forward from the previous labeled frame; needs a display), `run_eval.py` (orchestrator), `verify_metrics.py` (label-free self-checks).
+
+Key invariant: `run_eval.py` extracts **one** `clip.mp4` and runs *both* backbones + GT against it, so all frame indices are clip-relative 0-based (avoids the sam2-clip-vs-source frame-offset bug). GT is labeled every Nth frame (`--stride`) and only labeled frames are scored. `metrics.py` carries an `np.asfarray` shim (motmetrics 1.4.0 vs NumPy 2.x).
+
+```bash
+python eval/verify_metrics.py                            # validate metric plumbing (no labels needed)
+python eval/run_eval.py --name pickup1 --start 39600 --frames 120 --num-ids 6
+#   runs both backbones; prints the label_gt.py command if gt.txt is missing
+python eval/label_gt.py --clip eval/clips/pickup1/clip.mp4 --stride 5   # LOCAL (needs a display)
+python eval/run_eval.py --name pickup1 --num-ids 6       # re-run -> IDF1/IDsw comparison table
+```
 
 ### Pipeline B — action recognition (separate, not integrated)
 

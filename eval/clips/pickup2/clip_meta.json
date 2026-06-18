@@ -1,0 +1,6 @@
+{
+  "source": "data_dir/gameplay.mp4",
+  "start": 50800,
+  "frames": 120,
+  "stride": 5
+}

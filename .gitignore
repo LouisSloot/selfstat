@@ -25,3 +25,6 @@ YOLO/
 
 *.pyc
 *__pycache__/
+
+# eval harness — regenerable prediction artifacts (keep gt.txt + meta.json)
+eval/clips/*/preds/
