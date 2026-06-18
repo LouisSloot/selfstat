@@ -330,6 +330,17 @@ def supervised_label(detector, vid_src):
     return player.play_video()
 
 
+def label_seed_boxes(detector, vid_src):
+    """Run the manual labeling UI and return (labels, seed_boxes, ref_frame_idx) for
+    the SAM 2 backbone: scrub to a frame where the players are visible, click each
+    one, type an id. `labels[k]` is the user id for `seed_boxes[k]` (xyxy)."""
+    player = VideoPlayerLabeler(detector, vid_src)
+    sv_ids, _crops, boxes = player.play_video()
+    ref = player.selected_frame_num if player.selected_frame_num is not None else 0
+    seeds = [list(get_corners(box)) for box in boxes]
+    return sv_ids, seeds, ref
+
+
 def main():
     return
 

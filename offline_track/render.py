@@ -30,7 +30,8 @@ def _index_by_frame(tracklets, assignment):
     return per_frame
 
 
-def render_labeled_video(video_path, out_path, tracklets, assignment, max_frames=None):
+def render_labeled_video(video_path, out_path, tracklets, assignment, max_frames=None,
+                         labels=None):
     per_frame = _index_by_frame(tracklets, assignment)
 
     cap = cv2.VideoCapture(video_path)
@@ -39,6 +40,9 @@ def render_labeled_video(video_path, out_path, tracklets, assignment, max_frames
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    # scale annotation size with resolution so labels stay legible at 1080p+
+    font_scale = max(0.5, h / 1080.0 * 0.9)
+    thick = max(1, round(h / 1080.0 * 2))
 
     os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
     # mp4v is bundled with OpenCV; avc1/H.264 often isn't and fails silently.
@@ -54,9 +58,10 @@ def render_labeled_video(video_path, out_path, tracklets, assignment, max_frames
         for xyxy, _conf, pid in per_frame.get(frame_idx, []):
             x1, y1, x2, y2 = map(int, xyxy)
             color = color_for(pid)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(frame, f"Player {pid}", (x1, max(12, y1 - 8)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            text = str(labels.get(pid, pid)) if labels else f"Player {pid}"
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, thick)
+            cv2.putText(frame, text, (x1, max(int(20 * font_scale), y1 - 8)),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thick)
         out.write(frame)
         frame_idx += 1
         written += 1
@@ -67,7 +72,7 @@ def render_labeled_video(video_path, out_path, tracklets, assignment, max_frames
     return out_path
 
 
-def export_tracks(tracklets, assignment, path):
+def export_tracks(tracklets, assignment, path, labels=None):
     """Dump the per-frame tracking table as JSON (sorted by frame, then player)."""
     rows = []
     for tid, t in tracklets.items():
@@ -75,12 +80,15 @@ def export_tracks(tracklets, assignment, path):
         if pid is None:
             continue
         for det in t.detections:
-            rows.append({
+            row = {
                 "frame_idx": det.frame_idx,
                 "player_id": pid,
                 "bbox": [round(v, 1) for v in det.xyxy],
                 "conf": round(det.conf, 3),
-            })
+            }
+            if labels:
+                row["label"] = str(labels.get(pid, pid))
+            rows.append(row)
     rows.sort(key=lambda r: (r["frame_idx"], r["player_id"]))
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
     with open(path, "w") as f:

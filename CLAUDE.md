@@ -54,14 +54,24 @@ Per-player stats are a `GROUP BY player_id` over `events` — a join, not a trac
 
 There is **no build, lint, or test setup** in this repo — no `requirements.txt`/`environment.yml`, no test framework, no CI. Don't go looking for them. Development happens by running scripts directly inside the **`selfstat` conda env** (`/opt/miniconda3/envs/selfstat`, Python 3.12; configured via `.vscode/settings.json`). That env has torch 2.12 (MPS), torchvision, ultralytics 8.4, scipy, opencv, numpy — but **not** `torchreid` or `scikit-learn`, so the legacy OSNet `reid_manager.py` import path no longer resolves. Run things with `/opt/miniconda3/envs/selfstat/bin/python`.
 
-**Active offline pipeline — `run_offline.py` (the `offline_track/` package).** This is the implementation of the committed Direction: video in → per-frame boxes labeled with stable, post-hoc-resolved player IDs out (plus a `tracks.json`).
+**Active offline pipeline — `run_offline.py` (the `offline_track/` package).** Video in → per-frame boxes labeled with stable, post-hoc-resolved player IDs out (plus a `tracks.json`). Output → `./annotated_replays/tracked_<name>.mp4` (+ `.tracks.json`); model weights auto-download on first run. Two backbones via `--backbone`:
+
+`tracklets` (default) — detect + track + cluster. Best for long clips and needs no manual input:
 
 ```bash
-python run_offline.py --video clip.mp4                 # infer head count by clustering threshold
-python run_offline.py --video clip.mp4 --num-ids 6     # closed-set: known roster size (preferred)
+python run_offline.py --video clip.mp4 --num-ids 6       # closed-set: known roster size (preferred)
+python run_offline.py --video clip.mp4                   # infer head count via clustering threshold
 python run_offline.py --video clip.mp4 --max-frames 200  # cap frames while iterating
-# output -> ./annotated_replays/tracked_<name>.mp4  +  ./annotated_replays/tracked_<name>.tracks.json
-# weights (yolo11n.pt, DINOv2 ViT-S/14) auto-download on first run.
+```
+
+`sam2` — label the players once, then SAM 2 propagates each identity through the clip (continuous IDs, **no clustering**; only the seeded players are tracked, so extra people in frame are ignored). Memory-bound, so it runs on a **short** clip (auto-bounded to ~120 frames from the reference frame):
+
+```bash
+# manual labeling (needs a display): scrub to a frame, click each player, type an id, then SPACE
+python run_offline.py --video clip.mp4 --backbone sam2 --label
+# auto-seed from a reference frame instead of the GUI (handy for testing)
+python run_offline.py --video clip.mp4 --backbone sam2 --ref-frame 0 --max-objects 6
+# memory/quality knobs: --imgsz (lower = less memory), --max-frames, --sam-model sam2_t.pt
 ```
 
 Action-recognition finetuning lives under `act_reg_model/` and uses a sibling-module import (`from data_prep import ...`), so it must be run **from inside that directory**:
@@ -85,24 +95,30 @@ No manifest exists; install these into the conda env as needed (names as importe
 
 ## Architecture
 
-One tracking pipeline (the offline one, below), reusable building blocks kept from the removed online prototype, an action-recognition pipeline, and dataset tooling.
+One offline tracking pipeline (below) with two backbones — `tracklets` (detect+track+cluster) and `sam2` (seed once + propagate) — reusable building blocks kept from the removed online prototype, an action-recognition pipeline, and dataset tooling.
 
 ### Offline tracking — `offline_track/` (active)
 
 `run_offline.py` → `offline_track.pipeline.run`. Two passes over the video with global identity resolution in between — the committed offline design:
 
-1. **`tracklets.py` (`collect_tracklets`)** — Pass 1. Runs Ultralytics YOLO + a tracker (`bytetrack.yaml` default, `botsort.yaml` available) over the whole video, `classes=[0]` (person). Each tracker ID becomes a `Tracklet` (per-frame `Detection`s + a reservoir-sampled, bounded set of crops, so appearance is summarized without holding every frame in memory). The tracker is trusted only for *short-term* association.
+1. **`tracklets.py` (`collect_tracklets`)** — Pass 1. Runs Ultralytics YOLO + a tracker (`bytetrack.yaml` default, `botsort.yaml` available) over the whole video, `classes=[0]` (person). Each tracker ID becomes a `Tracklet` (per-frame `Detection`s + a reservoir-sampled, bounded set of crops, so appearance is summarized without holding every frame in memory). The tracker is trusted only for *short-term* association. **By default a segmentation model (`yolo11n-seg.pt`, `retina_masks=True`) is used and each crop's background is zeroed before storage** (the `mask_background` path; disable with `--no-mask`) — this keeps the embedding on the person rather than the shared scene.
 2. **`embedder.py` (`Embedder`)** — appearance features via **DINOv2 ViT-S/14** (torch.hub, `trust_repo=True`), falling back to torchvision ResNet50 if the hub fetch fails. A tracklet is summarized by the mean-pooled, L2-normalized per-crop feature.
 3. **`cluster.py` (`cluster_tracklets`)** — the heart of the offline approach. Agglomerative (average-linkage) clustering over cosine distances with a hard **cannot-link constraint**: two tracklets that share any frame are necessarily different people and may never merge (a global constraint only offline can enforce). `--num-ids` cuts to a known roster size (respecting the cannot-link floor); otherwise it cuts at `--cluster-threshold` cosine distance. Player IDs are renumbered by first appearance. scipy only (no sklearn).
 4. **`render.py`** — Pass 2. Redraws the source video with one color-coded labeled box per detection (`render_labeled_video`), and dumps the per-frame tracking table to `*.tracks.json` (`export_tracks`) — the `tracks` half of the canonical data model.
 
-**Known quality limitation (verified, not a bug):** within-frame identities are provably consistent (cannot-link guarantees no duplicate ID in a frame), but *cross-time* re-merging is only as good as the appearance features. On hard footage (small, top-down, background-heavy crops) DINOv2 doesn't reliably re-match the same person across time gaps, so one player ID can still span more than one physical person. Next levers: pass `--num-ids` (closed-set); background-suppress crops with segmentation masks before embedding; or swap in re-ID-tuned features. The SAM 2 backbone (Direction doc) is the planned Pass-1 upgrade.
+**Known quality limitation (verified, not a bug):** within-frame identities are provably consistent (cannot-link guarantees no duplicate ID in a frame), but *cross-time* re-merging is only as good as the appearance features. Background masking (above) measurably helped on a top-down test clip — the min cosine distance between co-present (provably different) people rose 0.13 → 0.21, and the count of merged identities dropped — but it did **not** eliminate the problem: on small, top-down crops DINOv2 still can't reliably re-match the same person across time gaps, so one player ID can span more than one physical person. Remaining levers for this backbone: pass `--num-ids` (closed-set), or swap in re-ID-tuned features. For short clips, the **`sam2` backbone (below) sidesteps this problem entirely** by propagating each manually-seeded identity directly.
+
+### SAM 2 backbone — `offline_track/sam_backbone.py` (`run_offline.py --backbone sam2`)
+
+The alternative Pass 1 for when players can be labeled up front (the Direction-doc upgrade). Each player is seeded once with a box on the reference (first) frame — manually via `label_players.label_seed_boxes` (the click UI) or automatically via `pipeline.auto_seed_boxes` (YOLO, for GUI-less testing). `track_with_sam2` then runs Ultralytics' `SAM2VideoPredictor`: the k-th seed box becomes SAM 2 object k, and SAM 2's memory propagates that identity through every frame, yielding per-object masks → boxes. Identity is therefore continuous **by construction** — no embedding, no clustering — and only the seeded players are tracked (extra people in frame are ignored). `run_sam2` reuses `render.py` with `assignment = {k: k}` plus a `labels` map so the drawn/exported ids are the user's.
+
+Trade-offs vs. `tracklets`: far better identity persistence on busy footage (verified — 6 seeds tracked across *all* frames of a gym clip, where the tracklet backbone fragmented the same footage into ~10 ids), but the predictor holds the whole clip in memory (cost ≈ objects × frames × `imgsz²`), so it is bounded to a **short** clip — `run_offline.py` auto-extracts a ~120-frame subclip from the reference frame (`pipeline.subclip`). Residual risks: mask bleed between players in a tight scrum, and identity drift if a player is fully occluded for a long stretch. Tested envelope on an M3 Pro (24 GB): 6 objects × 120 frames × `imgsz=640` ≈ 60 s; raise frames/imgsz cautiously (MPS OOM beyond ~that).
 
 ### Retained building blocks (from the removed online prototype)
 
 The online per-frame tracker was removed in the offline pivot (`track_players.py`, `reid_manager.py`/`IdentityManager`, `create_replay.py` — recover from git history if needed). Three reusable pieces were kept:
 
-1. **`label_players.py` (`supervised_label`)** — a human-in-the-loop OpenCV GUI: scrub to a reference frame, click each detected person box, type a label. Returns `(sv_ids, crops, selected_boxes)`. This is the intended seed for SAM 2 prompting and the most reusable asset.
+1. **`label_players.py` (`supervised_label`, `label_seed_boxes`)** — a human-in-the-loop OpenCV GUI: scrub to a reference frame, click each detected person box, type a label. `label_seed_boxes` returns `(labels, seed_boxes_xyxy, ref_frame_idx)` and is what the `sam2` backbone uses to seed players. The most reusable asset.
 2. **`detect.py` (`YOLODetector`)** — thin Ultralytics YOLO wrapper (`detect_video` streams per-frame results; `detect_frame` returns one). Pairs with the labeling UI.
 3. **`utils.py`** — shared helpers (IoU, crop, center/wh, person-box filtering, video metadata, cosine sim, normalize) used by `label_players.py`.
 

@@ -5,6 +5,13 @@ annotated_replays/
 *.md
 !CLAUDE.md
 
+# media (large video inputs/outputs are not tracked)
+*.webm
+*.mp4
+*.mov
+*.avi
+*.mkv
+
 # macOS
 .DS_Store
 
