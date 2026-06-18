@@ -78,16 +78,19 @@ def subclip(src, dst, start, n):
 
 
 def run_sam2(video_path, out_path, seed_boxes, labels=None, device=None,
-             model="sam2_t.pt", imgsz=640, max_frames=None, dump_tracks=True):
+             model="sam2_t.pt", imgsz=640, max_frames=None, dump_tracks=True,
+             gate=True, gate_iou=0.3):
     """SAM 2 backbone: seed boxes on frame 0 of `video_path`, propagate, render."""
     from .sam_backbone import track_with_sam2
 
     device = get_device(device)
     print(f"[pipeline] SAM2 backbone  device={device}  model={model}  imgsz={imgsz}  "
-          f"seeds={len(seed_boxes)}")
+          f"seeds={len(seed_boxes)}  gate={gate}")
     t0 = time.time()
     tracklets = track_with_sam2(video_path, seed_boxes, device=device, model=model,
-                                imgsz=imgsz, max_frames=max_frames)
+                                imgsz=imgsz, max_frames=max_frames,
+                                gate_detector=("yolo11n.pt" if gate else None),
+                                gate_iou=gate_iou)
     assignment = {k: k for k in tracklets}
     render_labeled_video(video_path, out_path, tracklets, assignment,
                          max_frames=max_frames, labels=labels)

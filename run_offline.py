@@ -43,7 +43,8 @@ def _run_sam2_cli(args, out):
         return
 
     run_sam2(clip, out, seeds, labels=labels, device=args.device,
-             model=args.sam_model, imgsz=args.imgsz)
+             model=args.sam_model, imgsz=args.imgsz, gate=args.gate,
+             gate_iou=args.gate_iou)
 
 
 def main():
@@ -86,6 +87,11 @@ def main():
                     help="[sam2] inference image size (lower = less memory)")
     ap.add_argument("--max-objects", type=int, default=None,
                     help="[sam2 auto-seed] cap seeded people (largest first)")
+    ap.add_argument("--no-gate", dest="gate", action="store_false",
+                    help="[sam2] disable the per-frame detector precision gate")
+    ap.add_argument("--gate-iou", type=float, default=0.3,
+                    help="[sam2] min IoU for the detector precision gate")
+    ap.set_defaults(gate=True)
     args = ap.parse_args()
 
     out = args.out
