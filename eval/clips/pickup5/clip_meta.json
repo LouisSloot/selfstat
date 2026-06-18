@@ -1,0 +1,7 @@
+{
+  "source": "data_dir/gameplay.mp4",
+  "start": 68600,
+  "frames": 120,
+  "stride": 5,
+  "note": "players spread out (clean separation)"
+}

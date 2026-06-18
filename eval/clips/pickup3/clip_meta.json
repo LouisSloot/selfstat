@@ -1,0 +1,7 @@
+{
+  "source": "data_dir/gameplay.mp4",
+  "start": 12200,
+  "frames": 120,
+  "stride": 5,
+  "note": "early game, half-court"
+}

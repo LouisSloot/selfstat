@@ -1,0 +1,7 @@
+{
+  "source": "data_dir/gameplay.mp4",
+  "start": 59400,
+  "frames": 120,
+  "stride": 5,
+  "note": "scrum / drive to basket (hard, occlusion-heavy)"
+}
